@@ -111,6 +111,60 @@ auto parseMeals(const string &data) {
     return res;
 }
 
+struct MenuItem {
+    string description;
+    string allergens;
+    string price;
+};
+
+enum class DayParserState {
+    Description, Allergenes, Price
+};
+
+string removeAdditionalWhitespace(string input) {
+    string res;
+    unique_copy(input.begin(), input.end(), back_insert_iterator<string>(res), [](char a, char b) {
+        return isspace(a) && isspace(b);
+    });
+    return res;
+}
+
+auto parseDay(const string &dayString) {
+    auto res = vector<MenuItem>{};
+    auto stream = stringstream{dayString};
+    auto state = DayParserState::Description;
+    auto currentItem = MenuItem{};
+
+    for (string line; getline(stream, line);) {
+        line = removeAdditionalWhitespace(line);
+
+        if (line.find("Allergene") != string::npos) {
+            state = DayParserState::Allergenes;
+        } else if (line.find("€") != string::npos) {
+            state = DayParserState::Price;
+        }
+
+        switch (state) {
+            case DayParserState::Description:
+                currentItem.description.append(line);
+                break;
+            case DayParserState::Allergenes:
+                currentItem.allergens.append(line);
+                break;
+            case DayParserState::Price:
+                currentItem.price.append(line);
+                res.push_back(currentItem);
+                currentItem = MenuItem{};
+                state = DayParserState::Description;
+                break;
+        }
+        if (res.size() >= 3) {
+            break;
+        }
+    }
+    return res;
+}
+
 int main() {
     auto raw = getSpeiseplan();
     if (raw.empty()) {
@@ -121,7 +175,12 @@ int main() {
     auto mealPlan = parseMeals(raw);
 
     for (const auto &p : mealPlan) {
-        cout << p << endl;
+        auto dailyMenu = parseDay(p);
+        for (auto meal : dailyMenu) {
+            cout << meal.description << endl;
+            cout << meal.allergens << endl;
+            cout << meal.price << endl;
+        }
         cout << "**********************************************************************" << endl;
     }
 }
