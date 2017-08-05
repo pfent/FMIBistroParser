@@ -1,25 +1,46 @@
 #include <sstream>
 #include <regex>
 #include <boost/date_time/posix_time/posix_time.hpp>
-#include <cpr/cpr.h>
 #include <poppler/cpp/poppler-document.h>
 #include <poppler/cpp/poppler-page.h>
+#include <curl/curl.h>
 
 using namespace std;
 
+// as per https://stackoverflow.com/a/9786295
+static size_t writeCallback(void *contents, size_t size, size_t nmemb, void *userp) {
+    ((std::string *) userp)->append((char *) contents, size * nmemb);
+    return size * nmemb;
+}
+
+auto download(const string &url) {
+    std::string readBuffer;
+    auto curl = curl_easy_init();
+    if (curl == nullptr) {
+        throw runtime_error{"couldn't init curl"};
+    };
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+    auto res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        throw runtime_error{"downloading failed with: "s + curl_easy_strerror(res)};
+    }
+    curl_easy_cleanup(curl);
+
+    return readBuffer;
+}
+
 auto getSpeiseplan() {
     const auto weekNumber = boost::posix_time::second_clock::local_time().date().week_number();
-    const auto baseUrl = string{"http://www.betriebsrestaurant-gmbh.de/"};
-    const auto index = string{"index.php?id=91"};
-    const auto pdfRegex = regex{string{"<a href=\"(.*KW"} + to_string(weekNumber) + string{".+_FMI_.*\\.pdf)\" "}};
+    const auto baseUrl = "https://mpi.fs.tum.de/neu-an-der-tum/am-campus/essen-trinken/"s;
+    const auto pdfRegex = regex{"<a href=\"(.*speiseplan-kw" + to_string(weekNumber) + ".*pdf)\""};
 
-    const vector<string> pdfs = [baseUrl, index, pdfRegex]() {
+    const vector<string> pdfs = [&]() {
         auto res = vector<string>{};
-        auto response = cpr::Get(cpr::Url{baseUrl + index});
-        if (response.status_code != 200) {
-            return res;
-        }
-        auto stream = stringstream{response.text};
+        auto response = download(baseUrl);
+
+        auto stream = stringstream{response};
         for (string line; getline(stream, line);) {
             smatch match;
             if (regex_search(line, match, pdfRegex) && match.size() == 2) {
@@ -31,8 +52,8 @@ auto getSpeiseplan() {
 
     auto result = string{};
     for (const auto &pdf : pdfs) {
-        const auto response = cpr::Get(cpr::Url{baseUrl + pdf});
-        auto bytes = vector<char>{response.text.begin(), response.text.end()};
+        const auto response = download(pdf);
+        auto bytes = vector<char>{response.begin(), response.end()};
         auto doc = unique_ptr<poppler::document>(poppler::document::load_from_data(&bytes));
         const auto pages = doc->pages();
         for (int i = 0; i < pages; ++i) {
@@ -44,55 +65,63 @@ auto getSpeiseplan() {
     return result;
 }
 
-auto parseMeals(const string &data) {
-    auto mealPlan = map<string, vector<pair<string, double>>>{};
-    auto stream = stringstream{data};
-    auto currentDay = string{};
-    auto currentMeals = vector<pair<string, double>>{};
-    const auto daysRegex = regex{"^[Montag|Dienstag|Mittwoch|Donnerstag|Freitag]"};
-    const auto mealRegex = regex{"^\\d+\\.\\s*(.*) (\\d\\.\\d\\d)"};
-    for (string line; getline(stream, line);) {
-        auto match = smatch{};
-        if (regex_search(line, daysRegex)) {
-            if (currentMeals.size() != 0) {
-                mealPlan[currentDay] = currentMeals;
-            }
-            currentDay = line;
-            currentMeals.clear();
-        } else if (regex_search(line, match, mealRegex)) {
-            const auto meal = match[1];
-            const auto price = boost::lexical_cast<double>(match[2]);
-            currentMeals.push_back({meal, price});
-        }
+auto getLineSubstr(const string &line, size_t begin, size_t end = numeric_limits<size_t>::max()) {
+    if (begin > line.size()) {
+        return string{};
     }
-    return mealPlan;
+    if (end > line.size()) {
+        return line.substr(begin);
+    }
+    return line.substr(begin, end - begin);
 }
 
-int main(int, const char **) {
+auto parseMeals(const string &data) {
+    const auto daysInWeek = 5;
+    const auto daysRegex = regex{"(Montag).*(Dienstag).*(Mittwoch).*(Donnerstag).*(Freitag)"};
+    auto stream = stringstream{data};
+    const auto daysPoss = [&]() {
+        vector<size_t> poss;
+        for (string line; getline(stream, line);) {
+            smatch match;
+            if (regex_search(line, match, daysRegex) && match.size() == (1 + daysInWeek)) {
+                for (size_t i = 1; i <= daysInWeek; ++i) {
+                    poss.push_back(static_cast<size_t>(match.position(i)));
+                }
+                return poss; // early exit, so we can continue stream
+            }
+        }
+        return poss;
+    }();
+    if (daysPoss.empty()) {
+        throw runtime_error{"couldn't locate weekdays. maybe the structure of the PDF changed?"};
+    }
+
+    vector<string> res(daysInWeek);
+    for (string line; getline(stream, line);) {
+        for (size_t i = 0; i < daysPoss.size() - 1; ++i) {
+            auto dayString = getLineSubstr(line, daysPoss[i], daysPoss[i + 1]);
+            res[i].append(dayString).append("\n");
+        }
+
+        auto lastDay = daysPoss.size() - 1;
+        auto lastDayString = getLineSubstr(line, daysPoss[lastDay]);
+        res[lastDay].append(lastDayString).append("\n");
+    }
+
+    return res;
+}
+
+int main() {
     auto raw = getSpeiseplan();
     if (raw.empty()) {
         cerr << "Error downloading\n";
         return -1;
     }
-    // c++ regex can't multiline match. [\s\S]* is the multiline match equivalent to .*
-    const auto header = regex{"([\\s\\S]*Tagessuppe.*)"};
-    const auto footer = regex{"(Enthält laut neuer Lebensmittel-Informationsverordnung:[\\s\\S]*)"};
-
-    raw = regex_replace(raw, header, "");
-    raw = regex_replace(raw, footer, "");
-    raw = regex_replace(raw, regex{"(\n )"}, " "); // some lines have random newlines in them
-    raw = regex_replace(raw, regex{"oder B.n.W."}, ""); // Beilage nach Wahl
-    raw = regex_replace(raw, regex{"\\*"}, ""); // random asterisks
-    raw = regex_replace(raw, regex{" \\d(,\\d)* "}, ""); // additives "1,2,3"
-
-    raw = regex_replace(raw, regex{"( +)"}, " "); // remove superfluous whitespace
 
     auto mealPlan = parseMeals(raw);
-    for (const auto &day : mealPlan) {
-        cout << day.first << " has following meals:\n";
-        for (const auto &meal : day.second) {
-            cout << meal.first << " for " << meal.second << "€\n";
-        }
-    }
 
+    for (const auto &p : mealPlan) {
+        cout << p << endl;
+        cout << "**********************************************************************" << endl;
+    }
 }
