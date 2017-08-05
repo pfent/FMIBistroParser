@@ -1,6 +1,0 @@
-[submodule "ext/cpr"]
-	path = ext/cpr
-	url = git@github.com:whoshuu/cpr.git
-[submodule "ext/poppler"]
-	path = ext/poppler
-	url = https://github.com/danigm/poppler.git
