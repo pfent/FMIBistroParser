@@ -1,6 +1,7 @@
 #include <sstream>
 #include <regex>
 #include <boost/date_time/posix_time/posix_time.hpp>
+#include <boost/algorithm/string.hpp>
 #include <poppler/cpp/poppler-document.h>
 #include <poppler/cpp/poppler-page.h>
 #include <curl/curl.h>
@@ -121,11 +122,13 @@ enum class DayParserState {
     Description, Allergenes, Price
 };
 
+// as per: https://stackoverflow.com/a/35302029
 string removeAdditionalWhitespace(string input) {
     string res;
     unique_copy(input.begin(), input.end(), back_insert_iterator<string>(res), [](char a, char b) {
-        return isspace(a) && isspace(b);
+        return (isspace(a) != 0) && (isspace(b) != 0);
     });
+    boost::trim(res);
     return res;
 }
 
@@ -146,13 +149,15 @@ auto parseDay(const string &dayString) {
 
         switch (state) {
             case DayParserState::Description:
-                currentItem.description.append(line);
+                currentItem.description.append(line).append(" ");
                 break;
             case DayParserState::Allergenes:
-                currentItem.allergens.append(line);
+                currentItem.allergens.append(line).append(" ");
                 break;
             case DayParserState::Price:
-                currentItem.price.append(line);
+                currentItem.price = line;
+                boost::trim(currentItem.description);
+                boost::trim(currentItem.allergens);
                 res.push_back(currentItem);
                 currentItem = MenuItem{};
                 state = DayParserState::Description;
