@@ -5,6 +5,7 @@
 #include <poppler/cpp/poppler-document.h>
 #include <poppler/cpp/poppler-page.h>
 #include <curl/curl.h>
+#include <fstream>
 
 using namespace std;
 
@@ -51,10 +52,18 @@ auto getSpeiseplan() {
         return res;
     }();
 
-    auto result = string{};
+    auto result = vector<vector<char>>{};
     for (const auto &pdf : pdfs) {
         const auto response = download(pdf);
         auto bytes = vector<char>{response.begin(), response.end()};
+        result.push_back(bytes);
+    }
+    return result;
+}
+
+auto pdfsToString(vector<vector<char>> pdfs) {
+    auto result = string{};
+    for (auto &bytes : pdfs) {
         auto doc = unique_ptr<poppler::document>(poppler::document::load_from_data(&bytes));
         const auto pages = doc->pages();
         for (int i = 0; i < pages; ++i) {
@@ -170,8 +179,23 @@ auto parseDay(const string &dayString) {
     return res;
 }
 
-int main() {
-    auto raw = getSpeiseplan();
+auto readFile(const string &filename) {
+    std::ifstream file(filename, std::ios::binary);
+    std::vector<char> content((std::istreambuf_iterator<char>(file)),
+                              std::istreambuf_iterator<char>());
+    vector<vector<char>> res;
+    res.push_back(content);
+    return res;
+}
+
+int main(int argc, const char *argv[]) {
+    vector<vector<char>> pdfs;
+    if (argc > 1) {
+        pdfs = readFile(argv[1]);
+    } else {
+        pdfs = getSpeiseplan();
+    }
+    auto raw = pdfsToString(pdfs);
     if (raw.empty()) {
         cerr << "Error downloading\n";
         return -1;

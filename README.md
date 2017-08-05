@@ -15,5 +15,8 @@ make
 
 ## run with
 ```bash
+# parse the HTML for the current PDF
 ./FMIBistroParser
+# alternatively run with a local PDF (mostly for testing)
+./FMIBistroParser ~/Downloads/speiseplan-kw31_2017.pdf
 ```
