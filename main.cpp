@@ -1,11 +1,11 @@
 #include <sstream>
 #include <regex>
-#include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/algorithm/string.hpp>
 #include <poppler/cpp/poppler-document.h>
 #include <poppler/cpp/poppler-page.h>
 #include <curl/curl.h>
 #include <fstream>
+#include <iostream>
 
 using namespace std;
 
@@ -34,43 +34,20 @@ auto download(const string &url) {
 }
 
 auto getSpeiseplan() {
-    const auto weekNumber = boost::posix_time::second_clock::local_time().date().week_number();
-    const auto baseUrl = "https://mpi.fs.tum.de/neu-an-der-tum/am-campus/essen-trinken/"s;
-    const auto pdfRegex = regex{"<a href=\"(.*speiseplan-kw" + to_string(weekNumber) + ".*pdf)\""};
+    const auto pdf = "https://mpi.fs.tum.de/files/speiseplan/speiseplan.pdf"s;
 
-    const vector<string> pdfs = [&]() {
-        auto res = vector<string>{};
-        auto response = download(baseUrl);
-
-        auto stream = stringstream{response};
-        for (string line; getline(stream, line);) {
-            smatch match;
-            if (regex_search(line, match, pdfRegex) && match.size() == 2) {
-                res.push_back(match[1]);
-            }
-        }
-        return res;
-    }();
-
-    auto result = vector<vector<char>>{};
-    for (const auto &pdf : pdfs) {
-        const auto response = download(pdf);
-        auto bytes = vector<char>{response.begin(), response.end()};
-        result.push_back(bytes);
-    }
-    return result;
+    const auto response = download(pdf);
+    return vector<char>{response.begin(), response.end()};
 }
 
-auto pdfsToString(vector<vector<char>> pdfs) {
+auto pdfToString(vector<char> bytes) {
     auto result = string{};
-    for (auto &bytes : pdfs) {
-        auto doc = unique_ptr<poppler::document>(poppler::document::load_from_data(&bytes));
-        const auto pages = doc->pages();
-        for (int i = 0; i < pages; ++i) {
-            const auto page = unique_ptr<poppler::page>(doc->create_page(i));
-            const auto text = page->text().to_utf8();
-            result += string(text.begin(), text.end());
-        }
+    auto doc = unique_ptr<poppler::document>(poppler::document::load_from_data(&bytes));
+    const auto pages = doc->pages();
+    for (int i = 0; i < pages; ++i) {
+        const auto page = unique_ptr<poppler::page>(doc->create_page(i));
+        const auto text = page->text().to_utf8();
+        result += string(text.begin(), text.end());
     }
     return result;
 }
@@ -183,19 +160,17 @@ auto readFile(const string &filename) {
     std::ifstream file(filename, std::ios::binary);
     std::vector<char> content((std::istreambuf_iterator<char>(file)),
                               std::istreambuf_iterator<char>());
-    vector<vector<char>> res;
-    res.push_back(content);
-    return res;
+    return content;
 }
 
 int main(int argc, const char *argv[]) {
-    vector<vector<char>> pdfs;
+    vector<char> pdf;
     if (argc > 1) {
-        pdfs = readFile(argv[1]);
+        pdf = readFile(argv[1]);
     } else {
-        pdfs = getSpeiseplan();
+        pdf = getSpeiseplan();
     }
-    auto raw = pdfsToString(pdfs);
+    auto raw = pdfToString(pdf);
     if (raw.empty()) {
         cerr << "Error downloading\n";
         return -1;
